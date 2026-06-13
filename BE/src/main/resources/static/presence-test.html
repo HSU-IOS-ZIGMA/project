@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Presence STOMP Test</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f6f7f9;
+            color: #1f2937;
+        }
+
+        main {
+            width: min(960px, calc(100% - 32px));
+            margin: 32px auto;
+        }
+
+        h1 {
+            margin: 0 0 20px;
+            font-size: 24px;
+        }
+
+        .panel {
+            background: #ffffff;
+            border: 1px solid #d9dee7;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        input {
+            box-sizing: border-box;
+            width: 100%;
+            border: 1px solid #c8ced8;
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 14px;
+        }
+
+        .buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 16px;
+        }
+
+        button {
+            border: 1px solid #1f2937;
+            border-radius: 6px;
+            background: #1f2937;
+            color: #ffffff;
+            padding: 10px 12px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        button.secondary {
+            background: #ffffff;
+            color: #1f2937;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        #status {
+            display: inline-block;
+            padding: 5px 8px;
+            border-radius: 999px;
+            background: #e5e7eb;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        #status.connected {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        #status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        pre {
+            min-height: 280px;
+            max-height: 520px;
+            overflow: auto;
+            margin: 0;
+            padding: 16px;
+            border-radius: 8px;
+            background: #111827;
+            color: #e5e7eb;
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Presence STOMP Test</h1>
+
+    <section class="panel">
+        <p>Status: <span id="status">DISCONNECTED</span></p>
+
+        <div class="grid">
+            <div>
+                <label for="wsUrl">WebSocket URL</label>
+                <input id="wsUrl" value="ws://localhost:8080/ws">
+            </div>
+            <div>
+                <label for="promiseId">Promise ID</label>
+                <input id="promiseId" value="1">
+            </div>
+            <div>
+                <label for="message">Message</label>
+                <input id="message" value="hello">
+            </div>
+            <div>
+                <label for="accessToken">Access Token</label>
+                <input id="accessToken" placeholder="Bearer 없이 access token만 입력">
+            </div>
+        </div>
+
+        <div class="buttons">
+            <button id="connectBtn">Connect STOMP</button>
+            <button id="subscribeBtn" class="secondary" disabled>Subscribe</button>
+            <button id="joinBtn" class="secondary" disabled>Join Presence</button>
+            <button id="sendBtn" class="secondary" disabled>Send Ping</button>
+            <button id="leaveBtn" class="secondary" disabled>Leave Presence</button>
+            <button id="disconnectBtn" class="secondary" disabled>Disconnect</button>
+            <button id="clearBtn" class="secondary">Clear Log</button>
+        </div>
+    </section>
+
+    <section class="panel">
+        <pre id="log"></pre>
+    </section>
+</main>
+
+<script>
+    let ws = null;
+    let stompConnected = false;
+    let subscribed = false;
+
+    const $ = (id) => document.getElementById(id);
+    const status = $("status");
+    const logEl = $("log");
+    const connectBtn = $("connectBtn");
+    const subscribeBtn = $("subscribeBtn");
+    const joinBtn = $("joinBtn");
+    const sendBtn = $("sendBtn");
+    const leaveBtn = $("leaveBtn");
+    const disconnectBtn = $("disconnectBtn");
+
+    function log(message, data) {
+        const time = new Date().toLocaleTimeString();
+        const text = data === undefined ? message : `${message}\n${data}`;
+        logEl.textContent += `[${time}] ${text}\n\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setStatus(text, className) {
+        status.textContent = text;
+        status.className = className || "";
+    }
+
+    function updateButtons() {
+        connectBtn.disabled = ws && ws.readyState === WebSocket.OPEN;
+        subscribeBtn.disabled = !stompConnected || subscribed;
+        joinBtn.disabled = !stompConnected;
+        sendBtn.disabled = !stompConnected;
+        leaveBtn.disabled = !stompConnected;
+        disconnectBtn.disabled = !ws || ws.readyState === WebSocket.CLOSED;
+    }
+
+    function frame(command, headers, body) {
+        const headerLines = Object.entries(headers || {})
+            .map(([key, value]) => `${key}:${value}`)
+            .join("\n");
+        const payload = body || "";
+        return `${command}\n${headerLines}\n\n${payload}\0`;
+    }
+
+    function connect() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            return;
+        }
+
+        subscribed = false;
+        stompConnected = false;
+        setStatus("CONNECTING", "");
+        updateButtons();
+
+        ws = new WebSocket($("wsUrl").value);
+
+        ws.onopen = () => {
+            log("WebSocket opened");
+            ws.send(frame("CONNECT", {
+                "accept-version": "1.2",
+                "host": "localhost",
+                "Authorization": `Bearer ${$("accessToken").value.trim()}`
+            }));
+            log("STOMP CONNECT sent");
+            updateButtons();
+        };
+
+        ws.onmessage = (event) => {
+            log("Received", event.data);
+
+            if (event.data.startsWith("CONNECTED")) {
+                stompConnected = true;
+                setStatus("STOMP CONNECTED", "connected");
+                updateButtons();
+            }
+        };
+
+        ws.onerror = () => {
+            setStatus("ERROR", "error");
+            log("WebSocket error");
+            updateButtons();
+        };
+
+        ws.onclose = (event) => {
+            stompConnected = false;
+            subscribed = false;
+            setStatus("DISCONNECTED", "");
+            log(`WebSocket closed. code=${event.code}, reason=${event.reason || "-"}`);
+            updateButtons();
+        };
+    }
+
+    function subscribe() {
+        const promiseId = $("promiseId").value;
+        const destination = `/topic/promises/${promiseId}/presence`;
+        ws.send(frame("SUBSCRIBE", {
+            "id": `presence-${promiseId}`,
+            "destination": destination
+        }));
+        subscribed = true;
+        log(`SUBSCRIBE sent. destination=${destination}`);
+        updateButtons();
+    }
+
+    function sendPing() {
+        const promiseId = $("promiseId").value;
+        const destination = `/app/promises/${promiseId}/presence/ping`;
+        const body = JSON.stringify({message: $("message").value});
+
+        ws.send(frame("SEND", {
+            "destination": destination,
+            "content-type": "application/json"
+        }, body));
+        log(`SEND sent. destination=${destination}`, body);
+    }
+
+    function joinPresence() {
+        const promiseId = $("promiseId").value;
+        const destination = `/app/promises/${promiseId}/presence/join`;
+
+        ws.send(frame("SEND", {
+            "destination": destination
+        }));
+        log(`JOIN sent. destination=${destination}`);
+    }
+
+    function leavePresence() {
+        const promiseId = $("promiseId").value;
+        const destination = `/app/promises/${promiseId}/presence/leave`;
+
+        ws.send(frame("SEND", {
+            "destination": destination
+        }));
+        log(`LEAVE sent. destination=${destination}`);
+    }
+
+    function disconnect() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            return;
+        }
+
+        ws.send(frame("DISCONNECT", {}, ""));
+        ws.close();
+    }
+
+    connectBtn.addEventListener("click", connect);
+    subscribeBtn.addEventListener("click", subscribe);
+    joinBtn.addEventListener("click", joinPresence);
+    sendBtn.addEventListener("click", sendPing);
+    leaveBtn.addEventListener("click", leavePresence);
+    disconnectBtn.addEventListener("click", disconnect);
+    $("clearBtn").addEventListener("click", () => {
+        logEl.textContent = "";
+    });
+
+    updateButtons();
+</script>
+</body>
+</html>

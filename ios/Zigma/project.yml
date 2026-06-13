@@ -1,0 +1,15 @@
+name: Zigma
+options:
+  bundleIdPrefix: com.zigma
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  Zigma:
+    type: application
+    platform: iOS
+    sources:
+      - Zigma
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.zigma.app
+      INFOPLIST_FILE: Zigma/Resources/Info.plist
+      SWIFT_VERSION: "5.0"
